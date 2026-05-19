@@ -1,0 +1,22 @@
+# Entornos virtuales
+venv/
+env/
+
+# Variables de entorno (¡AQUÍ ESTÁN TUS CLAVES API!)
+.env
+
+# Archivos compilados y cacheados de Python
+__pycache__/
+*.pyc
+
+# Bases de datos y memoria de Jarvis
+memory_vector_db/
+chroma_db/
+
+# Logs del sistema y archivos de audio temporales
+logs/
+temp_speech*.mp3
+*.wav
+
+# Modelos descargados de IA local (para no saturar GitHub)
+**/.cache/huggingface/
