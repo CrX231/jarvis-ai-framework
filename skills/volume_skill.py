@@ -1,19 +1,22 @@
 import re
 from pycaw.pycaw import AudioUtilities
+from core.skill_registry import BaseSkill
 
-class VolumeSkill:
-    def __init__(self):
+class VolumeSkill(BaseSkill):
+    TRIGGERS = ["volumen", "silencia", "mute"]
+
+    def __init__(self, context):
+        super().__init__(context)
+        self.logger = context.logger
         try:
             # Nos conectamos a los controladores de audio de Windows
             dispositivo = AudioUtilities.GetSpeakers()
-            
-            # En las versiones modernas de pycaw, accedemos directamente al volumen
             self.volume_control = dispositivo.EndpointVolume
         except Exception as e:
-            print(f"[Error Audio] No se pudo conectar a los parlantes: {e}")
+            self.logger.error(f"[Error Audio] No se pudo conectar a los parlantes: {e}")
             self.volume_control = None
 
-    def change_volume(self, command):
+    def execute(self, command, attachment_path=None):
         if not self.volume_control:
             return "No tengo acceso a los controladores de audio de este equipo."
 

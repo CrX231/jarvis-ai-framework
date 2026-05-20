@@ -1,42 +1,46 @@
+from core.skill_registry import BaseSkill
 from core.desktop_agent import DesktopAgent
 
-class DesktopSkill:
-    def __init__(self, logger):
-        self.logger = logger
-        self.agent = DesktopAgent(logger)
+class DesktopSkill(BaseSkill):
+    TRIGGERS = ["escribe ", "presiona enter", "copia esto", "pega esto", "selecciona todo", "minimiza todo", "cierra esta ventana"]
 
-    def process_physical_command(self, comando):
+    def __init__(self, context):
+        super().__init__(context)
+        self.logger = context.logger
+        self.agent = DesktopAgent(self.logger)
+
+    def execute(self, command, attachment_path=None):
         """Traduce lenguaje natural en acciones físicas de teclado/ratón."""
         
+        # Ignoramos si es una instrucción de programación
+        if "código" in command:
+            return None 
+
+        self.logger.info("Activando actuadores físicos de teclado/ratón.")
+
         # --- ESCRITURA FÍSICA ---
-        if "escribe " in comando and "código" not in comando:
-            # Extraemos lo que quieres que escriba
-            texto_a_escribir = comando.split("escribe", 1)[1].strip()
-            # Quitamos comillas si las dictaste
+        if "escribe " in command:
+            texto_a_escribir = command.split("escribe", 1)[1].strip()
             texto_a_escribir = texto_a_escribir.replace('"', '').replace("'", "")
             return self.agent.type_text(texto_a_escribir)
             
         # --- ATAJOS COMUNES ---
-        elif "presiona enter" in comando or "dale enter" in comando:
+        elif "presiona enter" in command or "dale enter" in command:
             return self.agent.press_shortcut("enter")
             
-        elif "copia esto" in comando or "control c" in comando:
+        elif "copia esto" in command or "control c" in command:
             return self.agent.press_shortcut("ctrl+c")
             
-        elif "pega esto" in comando or "control v" in comando:
+        elif "pega esto" in command or "control v" in command:
             return self.agent.press_shortcut("ctrl+v")
         
-        elif "selecciona todo" in comando or "control a" in comando:
-            return self.agent.press_shortcut("ctrl+e")
-            
-        elif "selecciona todo" in comando or "control a" in comando:
+        elif "selecciona todo" in command or "control a" in command:
             return self.agent.press_shortcut("ctrl+a")
             
-        elif "minimiza todo" in comando or "muestra el escritorio" in comando:
-            # En Windows, Win+D minimiza todo
+        elif "minimiza todo" in command or "muestra el escritorio" in command:
             return self.agent.press_shortcut("win+d")
             
-        elif "cierra esta ventana" in comando or "alt f4" in comando:
+        elif "cierra esta ventana" in command or "alt f4" in command:
             return self.agent.press_shortcut("alt+f4")
             
         else:
