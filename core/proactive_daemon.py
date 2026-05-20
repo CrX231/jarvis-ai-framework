@@ -1,17 +1,21 @@
+import os
 import time
 import datetime
 import threading
 import requests
 import psutil
+import pyautogui
+from PIL import Image
 from dataclasses import dataclass
- 
- 
+
+from core.semantic_memory import SemanticMemory
+
 # ===========================================================================
 # MONITORES — cada uno solo sabe dos cosas:
 #   1. Cuándo verificar (interval)
 #   2. Qué publicar si algo falla (publica SPEAK_REQUEST al bus)
 # ===========================================================================
- 
+
 class BaseMonitor:
     """
     Clase base. Todos los monitores heredan de aquí.
@@ -21,21 +25,21 @@ class BaseMonitor:
         self.name      = name
         self.interval  = interval_seconds
         self._last_run = 0.0
- 
+
     def is_due(self) -> bool:
         """¿Ya pasó suficiente tiempo desde la última ejecución?"""
         return (time.time() - self._last_run) >= self.interval
- 
+
     def mark_ran(self):
         self._last_run = time.time()
- 
+
     def check(self) -> str | None:
         """
         Lógica de comprobación.
         Retorna un mensaje si hay algo que reportar, None si todo OK.
         """
         raise NotImplementedError
- 
+
     def tick(self, event_bus):
         """
         Llamado por el scheduler. Si hay algo que reportar,
@@ -50,8 +54,8 @@ class BaseMonitor:
                 event_bus.publish("SPEAK_REQUEST", {"text": mensaje})
         except Exception as e:
             event_bus.logger.warning(f"[Monitor:{self.name}] Error en check: {e}")
- 
- 
+
+
 # ---------------------------------------------------------------------------
 # Monitor: CPU y RAM
 # ---------------------------------------------------------------------------
@@ -60,48 +64,51 @@ class SystemResourceMonitor(BaseMonitor):
         super().__init__("Sistema", interval)
         self.cpu_thresh = cpu_threshold
         self.ram_thresh = ram_threshold
- 
+
     def check(self) -> str | None:
         cpu = psutil.cpu_percent(interval=1)
         ram = psutil.virtual_memory().percent
- 
+
         alertas = []
         if cpu > self.cpu_thresh:
             alertas.append(f"CPU al {cpu:.0f} por ciento")
         if ram > self.ram_thresh:
             alertas.append(f"RAM al {ram:.0f} por ciento")
- 
+
         if alertas:
             return "Alerta de sistema: " + " y ".join(alertas) + ". Considera cerrar aplicaciones."
         return None
- 
- 
+
+
 # ---------------------------------------------------------------------------
 # Monitor: Conectividad a internet
 # ---------------------------------------------------------------------------
+# ... (Mantén tus imports existentes y añade el import del event_bus si hace falta)
+
 class InternetMonitor(BaseMonitor):
     def __init__(self, interval=20):
         super().__init__("Internet", interval)
         self._last_state = True
- 
+
     def _ping(self) -> bool:
         try:
             requests.get("https://www.google.com", timeout=4)
             return True
         except Exception:
             return False
- 
-    def check(self) -> str | None:
+
+    def tick(self, event_bus):
+        if not self.is_due(): return
+        self.mark_ran()
+        
         online = self._ping()
-        if not online and self._last_state:
-            self._last_state = False
-            return "Se perdió la conexión a internet."
-        if online and not self._last_state:
-            self._last_state = True
-            return "La conexión a internet se restableció."
-        return None
- 
- 
+        if online != self._last_state:
+            self._last_state = online
+            # NOTIFICAR AL SISTEMA DEL CAMBIO
+            event_bus.publish("NETWORK_STATUS", {"online": online})
+            event_bus.publish("SPEAK_REQUEST", {"text": "Modo supervivencia activado." if not online else "Conexión restablecida."})
+
+
 # ---------------------------------------------------------------------------
 # Monitor: Batería
 # ---------------------------------------------------------------------------
@@ -110,7 +117,7 @@ class BatteryMonitor(BaseMonitor):
         super().__init__("Batería", interval)
         self.threshold = low_threshold
         self._alerted  = False
- 
+
     def check(self) -> str | None:
         bat = psutil.sensors_battery()
         if not bat:
@@ -121,8 +128,8 @@ class BatteryMonitor(BaseMonitor):
         if bat.power_plugged:
             self._alerted = False
         return None
- 
- 
+
+
 # ---------------------------------------------------------------------------
 # Monitor: Sitio web caído
 # ---------------------------------------------------------------------------
@@ -131,7 +138,7 @@ class WebsiteMonitor(BaseMonitor):
         super().__init__(f"Web({url})", interval)
         self.url     = url
         self._was_up = True
- 
+
     def check(self) -> str | None:
         try:
             resp  = requests.get(self.url, timeout=8)
@@ -145,12 +152,67 @@ class WebsiteMonitor(BaseMonitor):
             self._was_up = True
             return f"El sitio {self.url} volvió a estar en línea."
         return None
- 
- 
+
+
+# ---------------------------------------------------------------------------
+# Monitor: Consciencia Visual Continua (Visual Memory)
+# ---------------------------------------------------------------------------
+class VisualAwarenessMonitor(BaseMonitor):
+    def __init__(self, logger, brain, interval=300): # 300 segundos = 5 minutos
+        super().__init__("Ojo_Visual", interval)
+        self.logger = logger
+        self.brain = brain
+        self.memory_db = SemanticMemory(logger)
+        
+        self.temp_dir = "temp_vision"
+        if not os.path.exists(self.temp_dir):
+            os.makedirs(self.temp_dir)
+
+    def check(self) -> str | None:
+        """Toma una foto, la analiza y la guarda en la base de datos vectorial."""
+        img_path = os.path.join(self.temp_dir, "context_snapshot.png")
+        
+        try:
+            # 1. Tomamos la captura en silencio
+            pyautogui.screenshot(img_path)
+            img = Image.open(img_path)
+            
+            # 2. Le pedimos al cerebro que extraiga el contexto semántico
+            prompt = (
+                "Describe en UNA sola oración corta qué está haciendo el usuario en esta pantalla. "
+                "Céntrate en el contexto útil (ej. 'Leyendo un PDF sobre metodologías Lean', "
+                "'Escribiendo código en Python para un ERP', 'Viendo un video de motocicletas'). "
+                "No uses introducciones."
+            )
+            
+            contexto = self.brain.think(prompt, image=img)
+            
+            if contexto and "error" not in contexto.lower():
+                # 3. Guardamos el contexto en la memoria a largo plazo con la fecha y hora
+                timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                mem_id = f"vis_{int(time.time())}"
+                
+                texto_memoria = f"A las {timestamp}, en la pantalla se veía esto: {contexto}"
+                self.memory_db.store_memory(mem_id, texto_memoria, {"source": "visual_awareness"})
+                
+                self.logger.info(f"[VisualAwareness] Memoria visual registrada: {contexto}")
+                
+        except Exception as e:
+            self.logger.error(f"[VisualAwareness] Fallo en la captura de consciencia: {e}")
+        
+        finally:
+            # Limpieza del archivo temporal para no llenar el disco duro
+            if os.path.exists(img_path):
+                os.remove(img_path)
+                
+        # Retorna None porque este monitor es silencioso
+        return None
+
+
 # ===========================================================================
 # RECORDATORIOS
 # ===========================================================================
- 
+
 @dataclass
 class Reminder:
     hour:    int
@@ -158,8 +220,8 @@ class Reminder:
     message: str
     repeat:  bool = True
     fired:   bool = False
- 
- 
+
+
 class ReminderMonitor(BaseMonitor):
     """
     Gestiona todos los recordatorios del día.
@@ -168,17 +230,17 @@ class ReminderMonitor(BaseMonitor):
     def __init__(self):
         super().__init__("Recordatorios", interval=30)
         self._reminders: list[Reminder] = []
- 
+
     def add(self, hour: int, minute: int, message: str, repeat: bool = True):
         self._reminders.append(Reminder(hour, minute, message, repeat))
- 
+
     def add_in(self, minutes: int, message: str):
         """Recordatorio relativo: en N minutos desde ahora, sin repetición."""
         target = datetime.datetime.now() + datetime.timedelta(minutes=minutes)
         self._reminders.append(
             Reminder(target.hour, target.minute, message, repeat=False)
         )
- 
+
     def check(self) -> str | None:
         ahora = datetime.datetime.now()
         for r in self._reminders:
@@ -191,19 +253,19 @@ class ReminderMonitor(BaseMonitor):
             if not es_la_hora and r.fired and r.repeat:
                 r.fired = False
         return None
- 
- 
+
+
 # ===========================================================================
 # PROACTIVE DAEMON
 # ===========================================================================
- 
+
 class ProactiveDaemon:
     """
     Orquestador que delega TODO en tu EventBus y TaskQueue existentes.
- 
+
     Uso:
         event_bus.subscribe("SPEAK_REQUEST", jarvis.speak)
- 
+
         daemon = ProactiveDaemon(logger, event_bus, task_queue)
         daemon.add_monitor(SystemResourceMonitor())
         daemon.add_monitor(InternetMonitor())
@@ -212,22 +274,22 @@ class ProactiveDaemon:
         daemon.reminders.add_in(minutes=30, message="Han pasado 30 minutos.")
         daemon.start()
     """
- 
+
     def __init__(self, logger, event_bus, task_queue):
         self.logger     = logger
         self.event_bus  = event_bus
         self.task_queue = task_queue
         self._monitors: list[BaseMonitor] = []
         self._stop      = threading.Event()
- 
+
         # El gestor de recordatorios es un monitor más
         self.reminders  = ReminderMonitor()
         self._monitors.append(self.reminders)
- 
+
     def add_monitor(self, monitor: BaseMonitor):
         self._monitors.append(monitor)
         self.logger.info(f"[Daemon] Monitor registrado: {monitor.name}")
- 
+
     def start(self):
         """Delega el scheduler a la TaskQueue. No crea hilos nuevos."""
         self._stop.clear()
@@ -236,11 +298,11 @@ class ProactiveDaemon:
             f"[Daemon] ✅ Iniciado con {len(self._monitors)} monitores "
             f"(encolado en TaskQueue)."
         )
- 
+
     def stop(self):
         self._stop.set()
         self.logger.info("[Daemon] 🛑 Detenido.")
- 
+
     def _scheduler_loop(self):
         """
         Loop ligero dentro del worker de TaskQueue.
@@ -252,28 +314,28 @@ class ProactiveDaemon:
                 monitor.tick(self.event_bus)
             time.sleep(1)
         self.logger.info("[Daemon] Scheduler finalizado.")
- 
- 
+
+
 # ===========================================================================
 # DEMO — ejecuta este archivo directamente para probar
 # ===========================================================================
 if __name__ == "__main__":
     import logging
     import queue
- 
+
     logging.basicConfig(level=logging.INFO, format="%(asctime)s  %(message)s")
     logger = logging.getLogger("JARVIS")
- 
+
     # Tus clases originales (sin modificar)
     class EventBus:
         def __init__(self, logger):
             self.logger      = logger
             self.subscribers = {}
- 
+
         def subscribe(self, event_type, callback_function):
             self.subscribers.setdefault(event_type, []).append(callback_function)
             self.logger.info(f"Nuevo suscriptor adherido al evento: {event_type}")
- 
+
         def publish(self, event_type, data=None):
             if event_type in self.subscribers:
                 self.logger.info(f"Disparando evento: {event_type}")
@@ -282,7 +344,7 @@ if __name__ == "__main__":
                         callback(data)
                     except Exception as e:
                         self.logger.error(f"Fallo en suscriptor de {event_type}: {e}")
- 
+
     class TaskQueue:
         def __init__(self, logger):
             self.task_queue    = queue.Queue()
@@ -292,11 +354,11 @@ if __name__ == "__main__":
             )
             self.worker_thread.start()
             self.logger.info("Cola de Tareas inicializada.")
- 
+
         def add_task(self, target_function, *args, **kwargs):
             self.task_queue.put((target_function, args, kwargs))
             self.logger.info(f"Tarea encolada: {target_function.__name__}")
- 
+
         def _process_queue(self):
             while True:
                 func, args, kwargs = self.task_queue.get()
@@ -307,14 +369,14 @@ if __name__ == "__main__":
                     self.logger.error(f"Fallo en {func.__name__}: {e}")
                 finally:
                     self.task_queue.task_done()
- 
+
     # Setup
     event_bus  = EventBus(logger)
     task_queue = TaskQueue(logger)
- 
+
     # ← Una sola línea conecta el daemon con tu TTS
     event_bus.subscribe("SPEAK_REQUEST", lambda msg: print(f"\n🤖 JARVIS: {msg}\n"))
- 
+
     # Configurar monitores
     daemon = ProactiveDaemon(logger, event_bus, task_queue)
     daemon.add_monitor(SystemResourceMonitor(cpu_threshold=80, interval=15))
@@ -323,9 +385,9 @@ if __name__ == "__main__":
     daemon.reminders.add(9,  0,  "Buenos días. ¿Qué tienes planeado hoy?")
     daemon.reminders.add(13, 0,  "Recuerda tomar un descanso para almorzar.", repeat=True)
     daemon.reminders.add_in(minutes=1, message="Un minuto desde que arrancaste Jarvis.")
- 
+
     daemon.start()
- 
+
     print("\n[DEMO] Ctrl+C para salir.\n")
     try:
         while True:
