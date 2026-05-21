@@ -1,15 +1,11 @@
 import datetime
-from core.skill_registry import BaseSkill
 
-class TimeSkill(BaseSkill):
-    TRIGGERS = ["hora", "qué hora", "dime la hora"]
-
-    def __init__(self, context):
-        super().__init__(context)
-
-    def execute(self, command, attachment_path=None):
+class TimeSkill:
+    def get_time(self):
         ahora = datetime.datetime.now()
-        hora_str = ahora.strftime('%I:%M')
+        
+        # Obtenemos la hora en formato de 12 horas sin el cero a la izquierda
+        hora = ahora.strftime("%I:%M").lstrip('0')
         
         # Determinamos si es mañana, tarde o noche para que suene natural
         if ahora.hour < 12:
@@ -19,4 +15,9 @@ class TimeSkill(BaseSkill):
         else:
             periodo = "de la noche"
             
-        return f"Son las {hora_str} {periodo}."
+        return f"Son las {hora} {periodo}."
+
+if __name__ == "__main__":
+    # Prueba aislada
+    skill = TimeSkill()
+    print(skill.get_time())

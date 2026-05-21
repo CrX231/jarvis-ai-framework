@@ -1,11 +1,7 @@
 import webbrowser
-from core.skill_registry import BaseSkill
 
-class BrowserSkill(BaseSkill):
-    TRIGGERS = ["busca"]
-
-    def __init__(self, context):
-        super().__init__(context)
+class BrowserSkill:
+    def __init__(self):
         # Un diccionario básico con las páginas más comunes
         self.sites = {
             "google": "https://www.google.com",
@@ -15,7 +11,7 @@ class BrowserSkill(BaseSkill):
             "facebook": "https://www.facebook.com"
         }
 
-    def execute(self, command, attachment_path=None):
+    def open_site(self, command):
         # Primero revisamos si quieres abrir una página específica de nuestra lista
         for site_name, url in self.sites.items():
             if site_name in command:

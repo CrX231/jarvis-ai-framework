@@ -1,29 +1,18 @@
 import time
 from core.semantic_memory import SemanticMemory
-from core.skill_registry import BaseSkill
 
-class MemorySkill(BaseSkill):
-    TRIGGERS = ["recuerda que", "guarda una nota", "qué recuerdas", "lee mis notas", "qué sabes sobre", "borra", "elimina", "olvida"]
+class MemorySkill:
+    def __init__(self, logger):
+        # Ahora inyectamos el logger desde main.py y se lo pasamos a la base de datos
+        self.logger = logger
+        self.db = SemanticMemory(logger)
 
-    def __init__(self, context):
-        super().__init__(context)
-        self.logger = context.logger
-        self.event_bus = context.event_bus
-        self.db = SemanticMemory(self.logger)
-
-    def execute(self, command, attachment_path=None):
-        if any(word in command for word in ["borra", "elimina", "olvida"]):
-            return self._delete_note_flow(command)
-        elif any(word in command for word in ["qué recuerdas", "lee mis notas", "qué sabes sobre"]):
-            return self._get_notes(command)
-        else:
-            return self._save_note(command)
-
-    def _save_note(self, comando):
+    def save_note(self, comando):
         nota = comando.replace("recuerda que", "").replace("guarda una nota", "").strip()
         if not nota:
             return "No especificaste qué debo recordar, señor."
         
+        # Generamos un ID único basado en el momento exacto de creación
         nota_id = f"mem_{int(time.time())}"
         exito = self.db.store_memory(nota_id, nota, {"fecha": time.strftime("%Y-%m-%d %H:%M:%S")})
         
@@ -31,7 +20,8 @@ class MemorySkill(BaseSkill):
             return "Información codificada exitosamente en mi red neuronal semántica."
         return "He detectado una falla al intentar cristalizar el recuerdo."
 
-    def _get_notes(self, comando):
+    def get_notes(self, comando):
+        # Filtramos la frase para quedarnos con el concepto central
         query = comando.replace("qué recuerdas sobre", "").replace("qué sabes sobre", "").replace("lee mis notas", "").replace("qué recuerdas", "").strip()
         
         if not query:
@@ -45,29 +35,21 @@ class MemorySkill(BaseSkill):
         respuesta = "Esto es lo que recuperé de mis archivos centrales: " + "; ".join(resultados)
         return respuesta
 
-    def _delete_note_flow(self, comando):
-        """Inicia el flujo de borrado pidiendo autorización mediante el EventBus."""
+    def delete_note(self, comando):
         item_a_borrar = comando.replace("borra", "").replace("elimina", "").replace("olvida", "").replace("sobre", "").strip()
         
         if not item_a_borrar:
             return "Debe especificar qué segmento de memoria desea purgar, señor."
             
+        # 1. Utilizamos ChromaDB para encontrar el recuerdo que matemáticamente más se parezca a lo que quieres borrar
         ids, textos = self.db.search_and_get_id(item_a_borrar)
         
-        if not ids:
-            return "No encontré coincidencias suficientemente exactas para proceder con una eliminación segura."
+        if ids:
+            id_a_borrar = ids[0]
+            texto_a_borrar = textos[0]
             
-        id_a_borrar = ids[0]
-        texto_a_borrar = textos[0]
-        
-        # DIP: Solicitamos autorización delegando la validación al enrutador central
-        self.event_bus.publish("AUTH_REQUEST", {
-            "action": f"borrar la nota sobre {item_a_borrar}",
-            "callback_success": lambda: self._execute_deletion(id_a_borrar, texto_a_borrar)
-        })
-        return None # La respuesta final vendrá del callback
-
-    def _execute_deletion(self, memory_id, texto_a_borrar):
-        """Este método solo se ejecuta si la capa de permisos da luz verde."""
-        self.db.delete_memory(memory_id)
-        self.event_bus.publish("SPEAK_REQUEST", {"text": f"He purgado exitosamente este archivo de mi sistema: '{texto_a_borrar}'."})
+            # 2. Procedemos con la destrucción del nodo
+            self.db.delete_memory(id_a_borrar)
+            return f"He purgado exitosamente este archivo de mi sistema: '{texto_a_borrar}'."
+        else:
+            return "No encontré coincidencias suficientemente exactas para proceder con una eliminación segura."

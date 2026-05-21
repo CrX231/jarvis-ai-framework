@@ -1,12 +1,8 @@
 import os
-from core.skill_registry import BaseSkill
 
-class SystemSkill(BaseSkill):
-    TRIGGERS = ["abre", "ejecuta"]
-
-    def __init__(self, context):
-        super().__init__(context)
-        self.logger = context.logger
+class SystemSkill:
+    def __init__(self):
+        # Diccionario que conecta lo que dices con el comando interno de Windows
         self.programs = {
             "bloc de notas": "notepad",
             "calculadora": "calc",
@@ -18,17 +14,15 @@ class SystemSkill(BaseSkill):
             "cmd": "cmd"
         }
 
-    def execute(self, command, attachment_path=None):
+    def open_program(self, command):
         for name, exe in self.programs.items():
             if name in command:
                 try:
+                    # 'start' es el comando de Windows para abrir procesos independientes
                     os.system(f"start {exe}")
                     return f"Iniciando {name}."
-                except Exception as e:
-                    self.logger.error(f"Fallo al abrir programa local {name}: {e}")
+                except Exception:
                     return f"Hubo un error al intentar abrir {name}."
         
-        # Retornamos None explícitamente si el programa no estaba en la lista.
-        # Esto permite que el SkillRegistry siga buscando otro skill que coincida
-        # (por ejemplo, si dijiste "abre youtube", lo tomará BrowserSkill).
+        # Si no encuentra el programa en la lista, retorna None para pasar al siguiente nivel
         return None
