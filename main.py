@@ -1,6 +1,6 @@
 import sys
 import atexit
-import time
+from PyQt5.QtWidgets import QApplication
 
 from core.config import WAKE_WORDS, CONFIRM_WORDS, CANCEL_WORDS, CPU_WARNING_THRESHOLD, RAM_WARNING_THRESHOLD, BATTERY_WARNING_THRESHOLD
 from interfaces.audio_listener import AudioListener, WakeWordListener
@@ -19,6 +19,8 @@ from core.workflow_engine import WorkflowEngine
 from core.proactive_daemon import ProactiveDaemon, SystemResourceMonitor, InternetMonitor, BatteryMonitor, VisualAwarenessMonitor
 from core.skill_registry import SkillRegistry
 
+# IMPORTAMOS LA NUEVA INTERFAZ GRÁFICA
+from interfaces.jarvis_ui import JarvisUI
 
 class JarvisContext:
     def __init__(self, logger, brain, event_bus, task_queue, permission_layer):
@@ -29,7 +31,8 @@ class JarvisContext:
         self.permission_layer = permission_layer
 
 class Jarvis:
-    def __init__(self):
+    def __init__(self, q_app):
+        self.q_app = q_app
         self.logger = SystemLogger()
         self.logger.info("=== INICIANDO SISTEMAS JARVIS ===")
 
@@ -70,18 +73,20 @@ class Jarvis:
 
         self.discord_link = DiscordInterface(self.process_command)
 
+        # --- INTERFAZ GRÁFICA ---
+        # Le pasamos el método shutdown para que pueda apagar todo si seleccionas "Salir"
+        self.ui = JarvisUI(self.event_bus, self.shutdown)
+
         # --- SUSCRIPCIONES VITALES ---
         self.event_bus.subscribe("SYSTEM_READY",  self._on_system_ready)
         self.event_bus.subscribe("SPEAK_REQUEST", self._on_speak_request)
         self.event_bus.subscribe("AUTH_REQUEST",  self._handle_auth_flow)
         self.event_bus.subscribe("RELOAD_SKILLS", lambda data: self.registry.auto_discover())
-        # CONEXIÓN DEL MODO SUPERVIVENCIA
         self.event_bus.subscribe("NETWORK_STATUS", self._handle_network_change)
 
         atexit.register(self.shutdown)
         self.logger.info("Arquitectura modular y bus de eventos acoplados correctamente.")
 
-    # --- LÓGICA DE CONMUTACIÓN OFFLINE ---
     def _handle_network_change(self, data):
         is_online = data.get("online")
         self.brain.use_offline = not is_online
@@ -89,36 +94,52 @@ class Jarvis:
         self.logger.info(f"Modo de operación cambiado a: {status}")
 
     def _on_system_ready(self, data):
-        self.voice.speak("Sistemas en línea. Protocolo de escucha activo.")
+        self.voice.speak("Sistemas visuales en línea, señor.")
+        self.event_bus.publish("STATE_CHANGE", {"state": "idle"})
 
     def _on_speak_request(self, data):
         texto = data.get("text", "")
         if texto:
             print(f"\nJarvis: {texto}")
+            self.event_bus.publish("STATE_CHANGE", {"state": "speaking"})
             self.voice.speak(texto)
+            self.event_bus.publish("STATE_CHANGE", {"state": "idle"})
 
     def _on_wake_word_detected(self):
+        # Jarvis cambia de color y pulsa más rápido para mostrar que te escucha
+        self.event_bus.publish("STATE_CHANGE", {"state": "listening"})
         self.event_bus.publish("SPEAK_REQUEST", {"text": "Dime."})
+        
         comando = self.listener.listen(activo=True)
         if comando:
             self.process_command(comando)
+        else:
+            self.event_bus.publish("STATE_CHANGE", {"state": "idle"})
 
     def _handle_auth_flow(self, data):
         accion = data.get("action")
         self.event_bus.publish("SPEAK_REQUEST", {"text": f"Se requiere autorización de voz para: {accion}. ¿Confirma?"})
+        
+        self.event_bus.publish("STATE_CHANGE", {"state": "listening"})
         respuesta_auth = self.listener.listen(activo=True)
+        self.event_bus.publish("STATE_CHANGE", {"state": "processing"})
 
         if respuesta_auth and self.permission_layer.is_authorized(respuesta_auth):
             data.get("callback_success")()
         else:
             self.event_bus.publish("SPEAK_REQUEST", {"text": "Operación abortada por seguridad."})
+        self.event_bus.publish("STATE_CHANGE", {"state": "idle"})
 
     def process_command(self, comando, attachment_path=None):
+        self.event_bus.publish("STATE_CHANGE", {"state": "processing"})
         comando = comando.lower()
         self.logger.info(f"Procesando comando: '{comando}'")
         self.context_manager.add_command(comando)
 
         if "salir" in comando or "apágate" in comando:
+            self.event_bus.publish("SPEAK_REQUEST", {"text": "Desconectando núcleos de ejecución. Que descanse."})
+            self.shutdown()
+            self.q_app.quit() # Cierra la ventana y el programa
             sys.exit(0)
 
         # 1. Workflows
@@ -155,12 +176,19 @@ class Jarvis:
     def run(self):
         self.discord_link.run_in_background()
         self.proactive_daemon.start()
+        
+        # Mostramos la UI
+        self.ui.show()
+        
         self.event_bus.publish("SYSTEM_READY")
         self.wake_listener.start()
-        try:
-            while True: time.sleep(1)
-        except KeyboardInterrupt: sys.exit(0)
+        
+        # Le pasamos el control a PyQt (esto mantiene vivo el programa)
+        sys.exit(self.q_app.exec_())
 
 if __name__ == "__main__":
-    jarvis = Jarvis()
+    # PyQt requiere que el QApplication se cree antes que cualquier otra cosa gráfica
+    app = QApplication(sys.argv)
+    
+    jarvis = Jarvis(app)
     jarvis.run()

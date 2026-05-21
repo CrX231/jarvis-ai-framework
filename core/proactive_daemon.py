@@ -228,7 +228,7 @@ class ReminderMonitor(BaseMonitor):
     Se comporta como un monitor más: el scheduler lo llama cada 30s.
     """
     def __init__(self):
-        super().__init__("Recordatorios", interval=30)
+        super().__init__("Recordatorios", 30)
         self._reminders: list[Reminder] = []
 
     def add(self, hour: int, minute: int, message: str, repeat: bool = True):
